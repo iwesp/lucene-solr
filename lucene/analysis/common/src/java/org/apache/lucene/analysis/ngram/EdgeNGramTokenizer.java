@@ -31,6 +31,8 @@ import org.apache.lucene.util.AttributeFactory;
 public class EdgeNGramTokenizer extends NGramTokenizer {
   public static final int DEFAULT_MAX_GRAM_SIZE = 1;
   public static final int DEFAULT_MIN_GRAM_SIZE = 1;
+  public static final boolean DEFAULT_KEEP_SHORT_TERM = false;
+  public static final boolean DEFAULT_KEEP_LONG_TERM = false;
 
   /**
    * Creates EdgeNGramTokenizer that can generate n-grams in the sizes of the given range
@@ -39,7 +41,17 @@ public class EdgeNGramTokenizer extends NGramTokenizer {
    * @param maxGram the largest n-gram to generate
    */
   public EdgeNGramTokenizer(int minGram, int maxGram) {
-    super(minGram, maxGram, true);
+    super(minGram, maxGram, DEFAULT_KEEP_SHORT_TERM, DEFAULT_KEEP_LONG_TERM, true);
+  }
+
+  /**
+   * Creates EdgeNGramTokenizer that can generate n-grams in the sizes of the given range
+   *
+   * @param minGram the smallest n-gram to generate
+   * @param maxGram the largest n-gram to generate
+   */
+  public EdgeNGramTokenizer(int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm) {
+    super(minGram, maxGram, keepShortTerm, keepLongTerm, true);
   }
 
   /**
@@ -50,7 +62,18 @@ public class EdgeNGramTokenizer extends NGramTokenizer {
    * @param maxGram the largest n-gram to generate
    */
   public EdgeNGramTokenizer(AttributeFactory factory, int minGram, int maxGram) {
-    super(factory, minGram, maxGram, true);
+    super(factory, minGram, maxGram, DEFAULT_KEEP_SHORT_TERM, DEFAULT_KEEP_LONG_TERM, true);
+  }
+
+  /**
+   * Creates EdgeNGramTokenizer that can generate n-grams in the sizes of the given range
+   *
+   * @param factory {@link org.apache.lucene.util.AttributeFactory} to use
+   * @param minGram the smallest n-gram to generate
+   * @param maxGram the largest n-gram to generate
+   */
+  public EdgeNGramTokenizer(AttributeFactory factory, int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm) {
+    super(factory, minGram, maxGram, keepShortTerm, keepLongTerm, true);
   }
 
 }

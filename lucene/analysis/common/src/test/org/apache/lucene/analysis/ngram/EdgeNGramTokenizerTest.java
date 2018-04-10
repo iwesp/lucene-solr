@@ -42,20 +42,20 @@ public class EdgeNGramTokenizerTest extends BaseTokenStreamTestCase {
   }
 
   public void testInvalidInput() throws Exception {
-    expectThrows(IllegalArgumentException.class, () -> {     
-      new EdgeNGramTokenizer(0, 0).setReader(input);
+    expectThrows(IllegalArgumentException.class, () -> {
+      new EdgeNGramTokenizer(0, 0);
     });
   }
 
   public void testInvalidInput2() throws Exception {
-    expectThrows(IllegalArgumentException.class, () -> {   
-      new EdgeNGramTokenizer(2, 1).setReader(input);
+    expectThrows(IllegalArgumentException.class, () -> {
+      new EdgeNGramTokenizer(2, 1);
     });
   }
 
   public void testInvalidInput3() throws Exception {
-    expectThrows(IllegalArgumentException.class, () -> {      
-      new EdgeNGramTokenizer(-1, 2).setReader(input);
+    expectThrows(IllegalArgumentException.class, () -> {
+      new EdgeNGramTokenizer(-1, 2);
     });
   }
 
@@ -70,7 +70,99 @@ public class EdgeNGramTokenizerTest extends BaseTokenStreamTestCase {
     tokenizer.setReader(input);;
     assertTokenStreamContents(tokenizer, new String[0], new int[0], new int[0], 5 /* abcde */);
   }
+  
+  public void testOversizedNgramsKeepShortTerm() throws Exception {
+    {
+      EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(6, 7, true, false);
+      tokenizer.setReader(input);
+      assertTokenStreamContents(tokenizer, new String[] {"abcde"}, new int[] {0}, new int[] {5} , 5 /* abcde */);  
+    }
+    
+    {
+      NGramTokenizer tokenizer = new EdgeNGramTokenizer(5,6, true, false) {
+        @Override
+        protected boolean isTokenChar(int chr) {
+          return chr != ' ';
+        }
+      };
+      tokenizer.setReader(new StringReader(" a bcd  efghij  x  "));
+      assertTokenStreamContents(
+          tokenizer,
+          new String[]{"a", "bcd", "efghi", "efghij", "x"},
+          new int[]   {  1,     3,      8,         8,  16},
+          new int[]   {  2,     6,      13,       14,  17},
+          19);
+    }
+  }
+  
+  public void testKeepShortTermKeepLongTerm() throws Exception {
+    final String inputString = "a bcd efghi jk";
 
+    { // default behaviour
+      EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(2, 3, false, false) {
+        @Override
+        protected boolean isTokenChar(int chr) {
+          return chr != ' ';
+        }
+      };
+      
+      tokenizer.setReader(new StringReader(inputString));
+      assertTokenStreamContents(tokenizer,
+          new String[] { "bc", "bcd",  "ef", "efg", "jk" },
+          new int[]    {    2,     2,     6,     6,   12 },
+          new int[]    {    4,     5,     8,     9,   14 },
+          new int[]    {    1,     1,     1,     1,    1 });
+    }
+
+    { // keepShortTerm && keepLongTerm
+      EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(2, 3, true, true) {
+        @Override
+        protected boolean isTokenChar(int chr) {
+          return chr != ' ';
+        }
+      };
+      
+      tokenizer.setReader(new StringReader(inputString));
+      assertTokenStreamContents(tokenizer,
+          new String[] { "a", "bc", "bcd",  "ef", "efg", "efghi", "jk" },
+          new int[]    {   0,    2,     2,     6,     6,       6,   12 },
+          new int[]    {   1,    4,     5,     8,     9,      11,   14 },
+          new int[]    {   1,    1,     1,     1,     1,       1,    1 });
+    }
+    
+    { // keepShortTerm && !keepLongTerm
+      EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(2, 3, true, false) {
+        @Override
+        protected boolean isTokenChar(int chr) {
+          return chr != ' ';
+        }
+      };
+      
+      tokenizer.setReader(new StringReader(inputString));
+      assertTokenStreamContents(tokenizer,
+          new String[] { "a", "bc", "bcd",  "ef",  "efg", "jk" },
+          new int[]    {   0,    2,     2,     6,      6,   12 },
+          new int[]    {   1,    4,     5,     8,      9,   14 },
+          new int[]    {   1,    1,     1,     1,      1,    1 });
+    }
+    
+    { // !keepShortTerm && keepLongTerm
+      EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(2, 3, false, true) {
+        @Override
+        protected boolean isTokenChar(int chr) {
+          return chr != ' ';
+        }
+      };
+      
+      tokenizer.setReader(new StringReader(inputString));
+      assertTokenStreamContents(tokenizer,
+          new String[] { "bc", "bcd",  "ef", "efg", "efghi", "jk" },
+          new int[]    {    2,     2,     6,     6,       6,   12 },
+          new int[]    {    4,     5,     8,     9,      11,   14 },
+          new int[]    {    1,     1,     1,     1,       1,    1 });
+    }
+  }
+  
   public void testFrontRangeOfNgrams() throws Exception {
     EdgeNGramTokenizer tokenizer = new EdgeNGramTokenizer(1, 3);
     tokenizer.setReader(input);
@@ -87,15 +179,17 @@ public class EdgeNGramTokenizerTest extends BaseTokenStreamTestCase {
   
   /** blast some random strings through the analyzer */
   public void testRandomStrings() throws Exception {
-    int numIters = TEST_NIGHTLY ? 10 : 1;
+    int numIters = TEST_NIGHTLY ? 16 : 4;
     for (int i = 0; i < numIters; i++) {
       final int min = TestUtil.nextInt(random(), 2, 10);
       final int max = TestUtil.nextInt(random(), min, 20);
+      final boolean keepShortTerm = i % 2 == 0;
+      final boolean keepLongTerm = i % 4 == 0;
       
       Analyzer a = new Analyzer() {
         @Override
         protected TokenStreamComponents createComponents(String fieldName) {
-          Tokenizer tokenizer = new EdgeNGramTokenizer(min, max);
+          Tokenizer tokenizer = new EdgeNGramTokenizer(min, max, keepShortTerm, keepLongTerm);
           return new TokenStreamComponents(tokenizer, tokenizer);
         }    
       };
@@ -120,7 +214,7 @@ public class EdgeNGramTokenizerTest extends BaseTokenStreamTestCase {
   }
 
   private static void testNGrams(int minGram, int maxGram, int length, final String nonTokenChars) throws IOException {
-    final String s = RandomStrings.randomAsciiOfLength(random(), length);
+    final String s = RandomStrings.randomAsciiLettersOfLength(random(), length);
     testNGrams(minGram, maxGram, s, nonTokenChars);
   }
 

@@ -37,12 +37,16 @@ import java.util.Map;
 public class NGramTokenizerFactory extends TokenizerFactory {
   private final int maxGramSize;
   private final int minGramSize;
+  private final boolean keepShortTerm;
+  private final boolean keepLongTerm;
 
   /** Creates a new NGramTokenizerFactory */
   public NGramTokenizerFactory(Map<String, String> args) {
     super(args);
     minGramSize = getInt(args, "minGramSize", NGramTokenizer.DEFAULT_MIN_NGRAM_SIZE);
     maxGramSize = getInt(args, "maxGramSize", NGramTokenizer.DEFAULT_MAX_NGRAM_SIZE);
+    keepShortTerm = getBoolean(args, "keepShortTerm", NGramTokenizer.DEFAULT_KEEP_SHORT_TERM);
+    keepLongTerm = getBoolean(args, "keepLongTerm", NGramTokenizer.DEFAULT_KEEP_LONG_TERM);
     if (!args.isEmpty()) {
       throw new IllegalArgumentException("Unknown parameters: " + args);
     }
@@ -51,6 +55,6 @@ public class NGramTokenizerFactory extends TokenizerFactory {
   /** Creates the {@link TokenStream} of n-grams from the given {@link Reader} and {@link AttributeFactory}. */
   @Override
   public Tokenizer create(AttributeFactory factory) {
-    return new NGramTokenizer(factory, minGramSize, maxGramSize);
+    return new NGramTokenizer(factory, minGramSize, maxGramSize, keepShortTerm, keepLongTerm);
   }
 }

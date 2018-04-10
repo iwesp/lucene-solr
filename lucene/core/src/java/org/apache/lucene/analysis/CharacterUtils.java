@@ -109,13 +109,13 @@ public final class CharacterUtils {
 
   /**
    * Fills the {@link CharacterBuffer} with characters read from the given
-   * reader {@link Reader}. This method tries to read <code>numChars</code>
-   * characters into the {@link CharacterBuffer}, each call to fill will start
-   * filling the buffer from offset <code>0</code> up to <code>numChars</code>.
-   * In case code points can span across 2 java characters, this method may
-   * only fill <code>numChars - 1</code> characters in order not to split in
-   * the middle of a surrogate pair, even if there are remaining characters in
-   * the {@link Reader}.
+   * {@link Reader}. This method tries to read <code>numChars</code> characters
+   * into the {@link CharacterBuffer}, each call to fill will start filling the
+   * buffer from offset <code>0</code> up to <code>numChars</code>. In case code
+   * points can span across 2 java characters, this method may only fill
+   * <code>numChars - 1</code> characters in order not to split in the middle of
+   * a surrogate pair, even if there are remaining characters in the
+   * {@link Reader}.
    * <p>
    * This method guarantees
    * that the given {@link CharacterBuffer} will never contain a high surrogate

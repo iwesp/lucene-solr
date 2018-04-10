@@ -56,41 +56,79 @@ import org.apache.lucene.util.AttributeFactory;
 public class NGramTokenizer extends Tokenizer {
   public static final int DEFAULT_MIN_NGRAM_SIZE = 1;
   public static final int DEFAULT_MAX_NGRAM_SIZE = 2;
+  public static final boolean DEFAULT_KEEP_SHORT_TERM = false;
+  public static final boolean DEFAULT_KEEP_LONG_TERM = false;
+  
+  private static final int BUFFER_INCREMENT = 1024;
 
   private CharacterUtils.CharacterBuffer charBuffer;
   private int[] buffer; // like charBuffer, but converted to code points
   private int bufferStart, bufferEnd; // remaining slice in buffer
   private int offset;
   private int gramSize;
-  private int minGram, maxGram;
+  private int minGram;
+  private int maxGram;
+  private boolean keepShortTerm;
+  private boolean keepLongTerm;
   private boolean exhausted;
+  private boolean bufferStartIsEdge;
   private int lastCheckedChar; // last offset in the buffer that we checked
   private int lastNonTokenChar; // last offset that we found to not be a token char
-  private boolean edgesOnly; // leading edges n-grams only
+  private boolean edgesOnly; // leading edge n-grams only
 
   private final CharTermAttribute termAtt = addAttribute(CharTermAttribute.class);
   private final PositionIncrementAttribute posIncAtt = addAttribute(PositionIncrementAttribute.class);
   private final PositionLengthAttribute posLenAtt = addAttribute(PositionLengthAttribute.class);
   private final OffsetAttribute offsetAtt = addAttribute(OffsetAttribute.class);
 
-  NGramTokenizer(int minGram, int maxGram, boolean edgesOnly) {
-    init(minGram, maxGram, edgesOnly);
+  NGramTokenizer(int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm, boolean edgesOnly) {
+    init(minGram, maxGram, keepShortTerm, keepLongTerm, edgesOnly);
   }
-
+  
+  NGramTokenizer(int minGram, int maxGram, boolean edgesOnly) {
+    init(minGram, maxGram, DEFAULT_KEEP_SHORT_TERM, DEFAULT_KEEP_LONG_TERM, edgesOnly);
+  }
+  
   /**
    * Creates NGramTokenizer with given min and max n-grams.
    * @param minGram the smallest n-gram to generate
    * @param maxGram the largest n-gram to generate
    */
   public NGramTokenizer(int minGram, int maxGram) {
-    this(minGram, maxGram, false);
+    init(minGram, maxGram, DEFAULT_KEEP_SHORT_TERM, DEFAULT_KEEP_LONG_TERM, false);
+  }
+  
+  /**
+   * Creates NGramTokenizer with given min and max n-grams.
+   * @param minGram the smallest n-gram to generate
+   * @param maxGram the largest n-gram to generate
+   */
+  public NGramTokenizer(int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm) {
+    init(minGram, maxGram, keepShortTerm, keepLongTerm, false);
   }
 
   NGramTokenizer(AttributeFactory factory, int minGram, int maxGram, boolean edgesOnly) {
     super(factory);
-    init(minGram, maxGram, edgesOnly);
+    init(minGram, maxGram, DEFAULT_KEEP_SHORT_TERM, DEFAULT_KEEP_LONG_TERM, edgesOnly);
+  }
+  
+  NGramTokenizer(
+      AttributeFactory factory, int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm, boolean edgesOnly) {
+    super(factory);
+    init(minGram, maxGram, keepShortTerm, keepLongTerm, edgesOnly);
   }
 
+  /**
+   * Creates NGramTokenizer with given min and max n-grams.
+   * @param factory {@link org.apache.lucene.util.AttributeFactory} to use
+   * @param minGram the smallest n-gram to generate
+   * @param maxGram the largest n-gram to generate
+   */
+  public NGramTokenizer(
+      AttributeFactory factory, int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm) {
+    this(factory, minGram, maxGram, keepShortTerm, keepLongTerm, false);
+  }
+  
   /**
    * Creates NGramTokenizer with given min and max n-grams.
    * @param factory {@link org.apache.lucene.util.AttributeFactory} to use
@@ -108,7 +146,7 @@ public class NGramTokenizer extends Tokenizer {
     this(DEFAULT_MIN_NGRAM_SIZE, DEFAULT_MAX_NGRAM_SIZE);
   }
 
-  private void init(int minGram, int maxGram, boolean edgesOnly) {
+  private void init(int minGram, int maxGram, boolean keepShortTerm, boolean keepLongTerm, boolean edgesOnly) {
     if (minGram < 1) {
       throw new IllegalArgumentException("minGram must be greater than zero");
     }
@@ -117,8 +155,11 @@ public class NGramTokenizer extends Tokenizer {
     }
     this.minGram = minGram;
     this.maxGram = maxGram;
+    this.keepShortTerm = keepShortTerm;
+    this.keepLongTerm = keepLongTerm;
     this.edgesOnly = edgesOnly;
-    charBuffer = CharacterUtils.newCharacterBuffer(2 * maxGram + 1024); // 2 * maxGram in case all code points require 2 chars and + 1024 for buffering to not keep polling the Reader
+    // charBuffer: At least 2 * maxGram in case all code points require 2 chars
+    charBuffer = CharacterUtils.newCharacterBuffer(2 * maxGram + BUFFER_INCREMENT);
     buffer = new int[charBuffer.getBuffer().length];
     // Make the term att large enough
     termAtt.resizeBuffer(2 * maxGram);
@@ -129,28 +170,42 @@ public class NGramTokenizer extends Tokenizer {
     clearAttributes();
 
     // termination of this loop is guaranteed by the fact that every iteration
-    // either advances the buffer (calls consumes()) or increases gramSize
+    // either advances the buffer (calls consume()) or increases gramSize
     while (true) {
-      // compact
-      if (bufferStart >= bufferEnd - maxGram - 1 && !exhausted) {
-        System.arraycopy(buffer, bufferStart, buffer, 0, bufferEnd - bufferStart);
-        bufferEnd -= bufferStart;
-        lastCheckedChar -= bufferStart;
-        lastNonTokenChar -= bufferStart;
-        bufferStart = 0;
-
-        // fill in remaining space
-        exhausted = !CharacterUtils.fill(charBuffer, input, buffer.length - bufferEnd);
-        // convert to code points
-        bufferEnd += CharacterUtils.toCodePoints(charBuffer.getBuffer(), 0, charBuffer.getLength(), buffer, bufferEnd);
+      if (bufferStart + maxGram + 1>= bufferEnd  && !exhausted) {
+        // Remaining buffer smaller than maxGram + succeding char.
+        compactBuffer();
       }
 
-      // should we go to the next offset?
       if (gramSize > maxGram || (bufferStart + gramSize) > bufferEnd) {
         if (bufferStart + 1 + minGram > bufferEnd) {
           assert exhausted;
-          return false;
+          if (keepShortTerm && bufferEnd - bufferStart > 0) {
+            if (bufferStartIsEdge) {
+              int termLength = findFirstNonTokenChar(bufferStart, bufferEnd) - bufferStart;
+              if (termLength > 0 && termLength < minGram) {
+                emitToken(termLength);
+                consume();
+                return true;  
+              }
+            }
+            consume();
+            continue;
+          }
+          else {
+            return false;  
+          }
         }
+        if (keepLongTerm && gramSize > maxGram && bufferStartIsEdge && isTokenChar(buffer[bufferStart + maxGram])) {
+          if (exhausted && bufferStart + maxGram >= bufferEnd) {
+            return false;
+          }
+          emitLongTerm();
+          consume();
+          gramSize = minGram;
+          return true;
+        }
+        
         consume();
         gramSize = minGram;
       }
@@ -158,24 +213,44 @@ public class NGramTokenizer extends Tokenizer {
       updateLastNonTokenChar();
 
       // retry if the token to be emitted was going to not only contain token chars
-      final boolean termContainsNonTokenChar = lastNonTokenChar >= bufferStart && lastNonTokenChar < (bufferStart + gramSize);
-      final boolean isEdgeAndPreviousCharIsTokenChar = edgesOnly && lastNonTokenChar != bufferStart - 1;
-      if (termContainsNonTokenChar || isEdgeAndPreviousCharIsTokenChar) {
+      final boolean currentGramContainsNonTokenChar = lastNonTokenChar >= bufferStart && lastNonTokenChar < (bufferStart + gramSize);
+      if (currentGramContainsNonTokenChar || (edgesOnly && !bufferStartIsEdge)) {
+        
+        if (keepShortTerm && bufferStartIsEdge && lastNonTokenChar > bufferStart) {
+          int termLength = findFirstNonTokenChar(bufferStart, bufferStart + gramSize) - bufferStart;
+          if (termLength > 0) {
+            emitToken(termLength);
+            consume();
+            gramSize = minGram;
+            return true;
+          }
+        }
         consume();
         gramSize = minGram;
         continue;
       }
 
-      final int length = CharacterUtils.toChars(buffer, bufferStart, gramSize, termAtt.buffer(), 0);
-      termAtt.setLength(length);
-      posIncAtt.setPositionIncrement(1);
-      posLenAtt.setPositionLength(1);
-      offsetAtt.setOffset(correctOffset(offset), correctOffset(offset + length));
-      ++gramSize;
+      emitToken(gramSize);
+      gramSize++;
       return true;
     }
   }
+  
+  private void compactBuffer() throws IOException {
+    System.arraycopy(buffer, bufferStart, buffer, 0, bufferEnd - bufferStart);
+    bufferEnd -= bufferStart;
+    lastCheckedChar -= bufferStart;
+    lastNonTokenChar -= bufferStart;
+    bufferStart = 0;
 
+    // fill in remaining space
+    int bufferFree = buffer.length - bufferEnd;
+    if (bufferFree > 2) {
+      exhausted = !CharacterUtils.fill(charBuffer, input, Math.min(bufferFree, charBuffer.getBuffer().length));
+      bufferEnd += CharacterUtils.toCodePoints(charBuffer.getBuffer(), 0, charBuffer.getLength(), buffer, bufferEnd);  
+    }
+  }
+  
   private void updateLastNonTokenChar() {
     final int termEnd = bufferStart + gramSize - 1;
     if (termEnd > lastCheckedChar) {
@@ -188,10 +263,30 @@ public class NGramTokenizer extends Tokenizer {
       lastCheckedChar = termEnd;
     }
   }
+  
+  private int findFirstNonTokenChar(int startOffset, int endOffset) {
+    for (int i = startOffset; i < endOffset; i++) {
+      if (!isTokenChar(buffer[i])) {
+        return i;
+      }
+    }
+    return endOffset;
+  }
 
-  /** Consume one code point. */
+  /** Consumes one code point, advancing bufferStart by one and offset by 1 or 2. */
   private void consume() {
-    offset += Character.charCount(buffer[bufferStart++]);
+    int currentCodePoint = buffer[bufferStart++];
+    bufferStartIsEdge = !isTokenChar(currentCodePoint);
+    offset += Character.charCount(currentCodePoint);
+    
+  }
+  
+  private void emitToken(int outputTermCodePointLength) {
+    final int charlength = CharacterUtils.toChars(buffer, bufferStart, outputTermCodePointLength, termAtt.buffer(), 0);
+    termAtt.setLength(charlength);
+    posIncAtt.setPositionIncrement(1);
+    posLenAtt.setPositionLength(1);
+    offsetAtt.setOffset(correctOffset(offset), correctOffset(offset + charlength));
   }
 
   /** Only collect characters which satisfy this condition. */
@@ -199,6 +294,30 @@ public class NGramTokenizer extends Tokenizer {
     return true;
   }
 
+  private void emitLongTerm() throws IOException {
+    int searchStartPos = bufferStart;
+    int delimiterPos;
+    while(true) {
+      delimiterPos = findFirstNonTokenChar(searchStartPos, bufferEnd);
+      
+      if (delimiterPos == bufferEnd && !exhausted) {
+        // Resize buffer
+        int[] buffer2 = new int[buffer.length + BUFFER_INCREMENT];
+        System.arraycopy(buffer, bufferStart, buffer2, bufferStart, bufferEnd - bufferStart);
+        buffer = buffer2;
+        
+        searchStartPos = bufferEnd - 1;
+        compactBuffer();
+        continue;
+      }
+      break;
+    }
+    
+    int codePointsToAppend = (delimiterPos - bufferStart);
+    termAtt.resizeBuffer(codePointsToAppend * 2);
+    emitToken(codePointsToAppend);
+  }
+  
   @Override
   public final void end() throws IOException {
     super.end();
@@ -211,6 +330,7 @@ public class NGramTokenizer extends Tokenizer {
     // set final offset
     offsetAtt.setOffset(endOffset, endOffset);
   }
+  
 
   @Override
   public final void reset() throws IOException {
@@ -220,6 +340,7 @@ public class NGramTokenizer extends Tokenizer {
     offset = 0;
     gramSize = minGram;
     exhausted = false;
+    bufferStartIsEdge = true;
     charBuffer.reset();
   }
 }
